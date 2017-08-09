@@ -8,10 +8,51 @@
 
 open FParsec
 
+let pWord = (<>) ' ' |> satisfy |> manyChars
+
+let (<!>) f x = x |>> f
+
+let (<*>) f x = f >>= fun f' -> x >>= fun x' -> preturn (f' x')
+
+let ws = pchar ' ' |> manyChars |>> ignore
+
+///https://developers.google.com/protocol-buffers/docs/proto3#scalar
+module ScalarType = 
+    let private mapping = 
+        [ "double",  typeof<double>
+          "float",   typeof<float>
+          "int32",   typeof<int>
+          "int64",   typeof<int64>
+          "uint32",  typeof<uint32>
+          "uint64",  typeof<uint64>
+          "sint32",  typeof<int32>
+          "sint64",  typeof<int64>
+          "fixed32", typeof<uint32>
+          "fixed64", typeof<uint64>
+          "sfixed32",typeof<int32>
+          "sfixed64",typeof<int64>
+          "bool",    typeof<bool>
+          "string",  typeof<string>
+          "bytes",   typeof<byte[]> ]
+        |> Map.ofList
+
+    let parser = 
+        mapping
+        |> Map.toSeq
+        |> Seq.map (fst >> pstring)
+        |> Seq.fold (<|>) pzero
+
+type Type = 
+    | Scalar of string
+    | Custom of string
+
+let pType = 
+    (ScalarType.parser |>> Scalar)
+    <|> (ws >>. pWord |>> Custom)
 
 type FieldSpec = 
     { Id : int
-      Type: string
+      Type: Type
       Name : string }
 
 type Field = 
@@ -23,14 +64,6 @@ type Message =
     { Name : string
       Fields : Field list } 
 
-let pWord = (<>) ' ' |> satisfy |> manyChars
-
-let (<!>) f x = x |>> f
-
-let (<*>) f x = f >>= fun f' -> x >>= fun x' -> preturn (f' x')
-
-let ws = pchar ' ' |> manyChars |>> ignore
-
 let pField = 
     let fieldSpec f t n i = f { Id=i; Type=t; Name=n }
     let pRequired = stringCIReturn "required" (fieldSpec Required)
@@ -38,11 +71,11 @@ let pField =
     let pRepeated = stringCIReturn "repeated" (fieldSpec Repeated)
     let pField = ws >>. (pRequired <|> pOptional <|> pRepeated)
     
-    let pType = ws >>. pWord
+    //TODO: fallback scalar to custom type
     let pName = ws >>. (noneOf " =" |> manyChars)
     let pId = ws >>. pstring "=" >>. spaces >>. pint32
 
-    pField <*> pType <*> pName <*> pId
+    pField <*> (ws >>. pType) <*> (ws >>. pName) <*> pId
 
 let pFields = spaces >>. sepEndBy pField (spaces >>. pchar ';' .>> spaces)
 
@@ -92,9 +125,9 @@ CalculateInfo """
 run pMessage """message CalculateInfo{"""
 run pMessage """message CalculateInfo{"""
 
-let pProto = pMessage |>> message .>> spaces .>> pchar '{' .>> spaces <*> pFields .>> spaces .>> pchar '}'
+let pProtoMessage = pMessage |>> message .>> spaces .>> pchar '{' .>> spaces <*> pFields .>> spaces .>> pchar '}'
 
-let pProtos = sepEndBy pProto spaces
+let pProtos = sepEndBy pProtoMessage spaces
 
 let sample = """
     message CalculateInfo {
